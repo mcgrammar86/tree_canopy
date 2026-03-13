@@ -1,0 +1,11 @@
+neighborhood_id,name,area_acres,population,zoning_primary,elevation_ft_avg,watershed
+N01,Bolton,480,3200,Residential/Commercial,280,Tualatin River
+N02,Hidden Springs,520,2800,Residential,620,Tanner Creek
+N03,Marylhurst,390,1900,Residential/Institutional,450,Tualatin River
+N04,Robinwood,610,4100,Residential,220,Willamette River
+N05,Sunset,450,3500,Residential,380,Tanner Creek
+N06,Savanna Oaks,380,2200,Residential,350,Tualatin River
+N07,Willamette,560,3100,Residential,180,Willamette River
+N08,Tanner Basin,500,2600,Residential,480,Tanner Creek
+N09,Parker Crest,420,2100,Residential,540,Tanner Creek
+N10,Bland Circle,426,2400,Residential/Commercial,320,Tualatin River

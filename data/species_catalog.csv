@@ -1,0 +1,21 @@
+species_id,common_name,scientific_name,native,prevalence_pct,avg_dbh_in,avg_height_ft,avg_crown_spread_ft,canopy_area_sqft,habitat_value,growth_rate,typical_lifespan_yr
+S01,Douglas Fir,Pseudotsuga menziesii,Yes,18.5,24,120,30,707,High,Medium,500
+S02,Western Red Cedar,Thuja plicata,Yes,9.2,20,100,25,491,High,Medium,400
+S03,Oregon White Oak,Quercus garryana,Yes,7.8,18,60,40,1257,Very High,Slow,500
+S04,Bigleaf Maple,Acer macrophyllum,Yes,11.3,16,70,35,962,High,Fast,200
+S05,Red Alder,Alnus rubra,Yes,6.4,12,50,25,491,Medium,Fast,80
+S06,Pacific Madrone,Arbutus menziesii,Yes,3.1,14,50,25,491,High,Slow,250
+S07,Western Hemlock,Tsuga heterophylla,Yes,4.5,18,90,22,380,High,Medium,400
+S08,Oregon Ash,Fraxinus latifolia,Yes,2.8,14,60,30,707,Medium,Medium,150
+S09,Black Cottonwood,Populus trichocarpa,Yes,3.2,20,100,30,707,Medium,Fast,100
+S10,Noble Fir,Abies procera,Yes,1.4,16,80,20,314,Medium,Slow,400
+S11,Norway Maple,Acer platanoides,No,4.6,14,50,35,962,Low,Medium,150
+S12,English Holly,Ilex aquifolium,No,2.1,6,30,15,177,Low (Invasive),Slow,100
+S13,Cherry (ornamental),Prunus spp.,No,5.8,10,25,20,314,Low,Medium,40
+S14,Pin Oak,Quercus palustris,No,3.2,16,60,35,962,Medium,Medium,150
+S15,European Beech,Fagus sylvatica,No,1.8,18,60,40,1257,Medium,Slow,300
+S16,Japanese Maple,Acer palmatum,No,3.4,6,20,15,177,Low,Slow,100
+S17,Deodar Cedar,Cedrus deodara,No,1.9,16,60,28,616,Low,Medium,200
+S18,Incense Cedar,Calocedrus decurrens,Yes,2.6,16,80,20,314,Medium,Medium,300
+S19,Ponderosa Pine,Pinus ponderosa,Yes,1.8,20,100,25,491,Medium,Medium,400
+S20,Other/Mixed,Various,Mixed,4.6,12,40,22,380,Varies,Varies,Varies
