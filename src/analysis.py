@@ -67,22 +67,27 @@ def neighborhood_summary(
 
 
 def all_neighborhood_summaries(
-    neighborhoods: Sequence[Neighborhood],
-    records: Sequence[CanopyRecord],
-    parks: Sequence[Park],
-) -> list[NeighborhoodSummary]:
+    neighborhoods,  # type: Sequence[Neighborhood]
+    records,        # type: Sequence[CanopyRecord]
+    parks,          # type: Sequence[Park]
+):
+    # type: (...) -> List[NeighborhoodSummary]
     return [neighborhood_summary(n, records, parks) for n in neighborhoods]
 
 
 def top_canopy_neighborhoods(
-    summaries: Sequence[NeighborhoodSummary], n: int = 5
-) -> list[NeighborhoodSummary]:
+    summaries,  # type: Sequence[NeighborhoodSummary]
+    n=5,        # type: int
+):
+    # type: (...) -> List[NeighborhoodSummary]
     return sorted(summaries, key=lambda s: s.canopy_pct, reverse=True)[:n]
 
 
 def lowest_canopy_neighborhoods(
-    summaries: Sequence[NeighborhoodSummary], n: int = 5
-) -> list[NeighborhoodSummary]:
+    summaries,  # type: Sequence[NeighborhoodSummary]
+    n=5,        # type: int
+):
+    # type: (...) -> List[NeighborhoodSummary]
     return sorted(summaries, key=lambda s: s.canopy_pct)[:n]
 
 
