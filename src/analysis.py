@@ -1,8 +1,6 @@
 """Canopy coverage analysis for West Linn."""
 
-from __future__ import annotations
-
-from typing import Sequence
+from typing import Dict, List, Sequence
 
 from .models import (
     CanopyRecord,
@@ -28,13 +26,14 @@ def citywide_canopy_pct(records: Sequence[CanopyRecord]) -> float:
     return (citywide_canopy_acres(records) / total) * 100
 
 
-def canopy_by_land_use(records: Sequence[CanopyRecord]) -> dict[str, dict[str, float]]:
+def canopy_by_land_use(records):
+    # type: (Sequence[CanopyRecord]) -> Dict[str, Dict[str, float]]
     """Return canopy stats grouped by land-use category.
 
     Returns a dict like:
         {"Single-Family Residential": {"area": ..., "canopy": ..., "pct": ...}, ...}
     """
-    groups: dict[str, dict[str, float]] = {}
+    groups = {}  # type: Dict[str, Dict[str, float]]
     for r in records:
         g = groups.setdefault(r.land_use, {"area": 0.0, "canopy": 0.0})
         g["area"] += r.area_acres
@@ -87,12 +86,10 @@ def lowest_canopy_neighborhoods(
     return sorted(summaries, key=lambda s: s.canopy_pct)[:n]
 
 
-def canopy_by_watershed(
-    neighborhoods: Sequence[Neighborhood],
-    records: Sequence[CanopyRecord],
-) -> dict[str, dict[str, float]]:
+def canopy_by_watershed(neighborhoods, records):
+    # type: (Sequence[Neighborhood], Sequence[CanopyRecord]) -> Dict[str, Dict[str, float]]
     """Aggregate canopy statistics by watershed."""
-    ws: dict[str, dict[str, float]] = {}
+    ws = {}  # type: Dict[str, Dict[str, float]]
     for n in neighborhoods:
         nhood_records = records_for_neighborhood(records, n.neighborhood_id)
         entry = ws.setdefault(n.watershed, {"area": 0.0, "canopy": 0.0})

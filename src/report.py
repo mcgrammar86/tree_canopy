@@ -1,8 +1,6 @@
 """Report generation for the West Linn tree canopy inventory."""
 
-from __future__ import annotations
-
-from typing import Sequence
+from typing import List, Sequence
 
 from .models import NeighborhoodSummary, Species, Park, EcosystemServices
 from .analysis import (
@@ -48,7 +46,7 @@ def generate_full_report() -> str:
     canopy_pct = citywide_canopy_pct(records)
     services = estimate_services(canopy_acres)
 
-    lines: list[str] = []
+    lines = []  # type: List[str]
 
     # Header
     lines.append(_hr("*"))

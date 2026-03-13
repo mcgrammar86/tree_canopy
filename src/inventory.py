@@ -1,10 +1,8 @@
 """Load and query the West Linn tree canopy inventory data."""
 
-from __future__ import annotations
-
 import csv
 from pathlib import Path
-from typing import Sequence
+from typing import List, Optional, Sequence
 
 from .models import CanopyRecord, Neighborhood, Park, Species
 
@@ -15,9 +13,10 @@ def _bool_from_str(value: str) -> bool:
     return value.strip().lower() in ("yes", "true", "1")
 
 
-def load_neighborhoods(path: Path | None = None) -> list[Neighborhood]:
+def load_neighborhoods(path=None):
+    # type: (Optional[Path]) -> List[Neighborhood]
     path = path or DATA_DIR / "neighborhoods.csv"
-    results: list[Neighborhood] = []
+    results = []  # type: List[Neighborhood]
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             results.append(
@@ -34,9 +33,10 @@ def load_neighborhoods(path: Path | None = None) -> list[Neighborhood]:
     return results
 
 
-def load_canopy_records(path: Path | None = None) -> list[CanopyRecord]:
+def load_canopy_records(path=None):
+    # type: (Optional[Path]) -> List[CanopyRecord]
     path = path or DATA_DIR / "canopy_inventory.csv"
-    results: list[CanopyRecord] = []
+    results = []  # type: List[CanopyRecord]
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             results.append(
@@ -56,9 +56,10 @@ def load_canopy_records(path: Path | None = None) -> list[CanopyRecord]:
     return results
 
 
-def load_species(path: Path | None = None) -> list[Species]:
+def load_species(path=None):
+    # type: (Optional[Path]) -> List[Species]
     path = path or DATA_DIR / "species_catalog.csv"
-    results: list[Species] = []
+    results = []  # type: List[Species]
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             lifespan = row["typical_lifespan_yr"]
@@ -81,9 +82,10 @@ def load_species(path: Path | None = None) -> list[Species]:
     return results
 
 
-def load_parks(path: Path | None = None) -> list[Park]:
+def load_parks(path=None):
+    # type: (Optional[Path]) -> List[Park]
     path = path or DATA_DIR / "parks_greenspaces.csv"
-    results: list[Park] = []
+    results = []  # type: List[Park]
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             results.append(
@@ -101,21 +103,21 @@ def load_parks(path: Path | None = None) -> list[Park]:
     return results
 
 
-def records_for_neighborhood(
-    records: Sequence[CanopyRecord], neighborhood_id: str
-) -> list[CanopyRecord]:
+def records_for_neighborhood(records, neighborhood_id):
+    # type: (Sequence[CanopyRecord], str) -> List[CanopyRecord]
     return [r for r in records if r.neighborhood_id == neighborhood_id]
 
 
-def parks_for_neighborhood(
-    parks: Sequence[Park], neighborhood_id: str
-) -> list[Park]:
+def parks_for_neighborhood(parks, neighborhood_id):
+    # type: (Sequence[Park], str) -> List[Park]
     return [p for p in parks if p.neighborhood_id == neighborhood_id]
 
 
-def native_species(species: Sequence[Species]) -> list[Species]:
+def native_species(species):
+    # type: (Sequence[Species]) -> List[Species]
     return [s for s in species if s.native]
 
 
-def invasive_species(species: Sequence[Species]) -> list[Species]:
+def invasive_species(species):
+    # type: (Sequence[Species]) -> List[Species]
     return [s for s in species if not s.native and s.habitat_value.startswith("Low")]

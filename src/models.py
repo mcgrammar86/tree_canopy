@@ -1,8 +1,7 @@
 """Data models for the West Linn tree canopy inventory."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
+from typing import List, Optional
 
 
 @dataclass
@@ -92,6 +91,6 @@ class NeighborhoodSummary:
     total_impervious_acres: float = 0.0
     total_open_ground_acres: float = 0.0
     canopy_pct: float = 0.0
-    records: list[CanopyRecord] = field(default_factory=list)
-    parks: list[Park] = field(default_factory=list)
-    ecosystem_services: EcosystemServices | None = None
+    records: List[CanopyRecord] = field(default_factory=list)
+    parks: List[Park] = field(default_factory=list)
+    ecosystem_services: Optional[EcosystemServices] = None
