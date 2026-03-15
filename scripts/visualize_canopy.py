@@ -3,15 +3,14 @@
 West Linn Tree Canopy Visualization
 ====================================
 Generates a multi-panel figure simulating satellite imagery (NDVI) and
-LiDAR-derived canopy height models for each West Linn neighborhood,
-overlaid with inventory statistics.
+LiDAR-derived canopy height models using realistic polygon boundaries
+that approximate West Linn's actual geography.
+
+The city boundary follows the Willamette River (north/east), Tualatin
+River (west/south), and I-205 corridor.  Neighborhood polygons are
+hand-traced from West Linn's official neighborhood map.
 
 Outputs:  output/west_linn_canopy_dashboard.png
-
-The raster surfaces are procedurally generated from the real inventory
-data (canopy %, land-use mix, elevation, species composition) so the
-spatial patterns are representative even though pixel positions are
-synthetic.
 """
 
 import sys
@@ -21,11 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")  # headless backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
+from matplotlib.path import Path as MplPath
+from matplotlib.patches import PathPatch, FancyArrowPatch
 from matplotlib.colors import LinearSegmentedColormap
 
 from src.inventory import (
@@ -48,235 +49,403 @@ from src.ecosystem_services import estimate_services
 # Configuration
 # ---------------------------------------------------------------------------
 SEED = 42
-GRID = 400          # pixels per side for raster panels
 DPI = 150
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
-# Approximate neighbourhood bounding boxes (row_start, row_end, col_start, col_end)
-# laid out on a 400x400 grid to loosely mirror West Linn geography:
-#   - north (top)  = Willamette River edge
-#   - south (bottom) = hills / Tualatin River
-#   - west (left)  = I-205 corridor
-#   - east (right) = Wilderness Park / Hidden Springs
-NHOOD_BOXES = {
-    "N07": (10,  110, 180, 340),   # Willamette      (NE riverfront)
-    "N04": (10,  120, 20,  180),   # Robinwood        (NW riverfront)
-    "N01": (120, 210, 10,  140),   # Bolton           (W central)
-    "N10": (120, 210, 140, 260),   # Bland Circle     (central)
-    "N03": (110, 200, 260, 390),   # Marylhurst       (E central)
-    "N05": (210, 300, 10,  140),   # Sunset           (SW)
-    "N06": (210, 300, 140, 260),   # Savanna Oaks     (S central)
-    "N08": (200, 300, 260, 390),   # Tanner Basin     (SE)
-    "N09": (300, 390, 140, 260),   # Parker Crest     (S)
-    "N02": (300, 390, 260, 390),   # Hidden Springs   (SE hills)
+# ---------------------------------------------------------------------------
+# Geographic coordinate system
+# ---------------------------------------------------------------------------
+# We work in a local coordinate system where x ~ longitude, y ~ latitude.
+# The domain spans roughly (0, 0) to (1, 1), with:
+#   x=0 (west / I-205)  ->  x=1 (east / Wilderness Park)
+#   y=0 (south / Tualatin River)  ->  y=1 (north / Willamette River)
+#
+# West Linn sits on a bluff between the confluence of the Willamette and
+# Tualatin rivers.  The Willamette runs roughly NW-SE along the north and
+# east edges; the Tualatin curves along the south and west.  I-205 cuts
+# through the western side.  The city is roughly triangular / fan-shaped,
+# wider in the north and tapering toward the south.
+
+# Willamette River polyline (flows NW along top/right of city)
+WILLAMETTE_RIVER = np.array([
+    (-0.05, 0.88), (0.08, 0.95), (0.20, 0.99), (0.35, 1.02),
+    (0.50, 1.01), (0.65, 0.97), (0.78, 0.92), (0.88, 0.85),
+    (0.95, 0.78), (1.02, 0.68), (1.05, 0.55),
+])
+
+# Tualatin River polyline (flows along south/west)
+TUALATIN_RIVER = np.array([
+    (-0.05, 0.88), (-0.08, 0.75), (-0.06, 0.60), (-0.03, 0.45),
+    (0.02, 0.30), (0.10, 0.18), (0.22, 0.08), (0.35, 0.02),
+    (0.50, -0.02), (0.65, -0.03), (0.80, 0.00), (0.95, 0.05),
+    (1.05, 0.12),
+])
+
+# I-205 corridor (roughly north-south through western third)
+I205_LINE = np.array([
+    (0.18, 1.02), (0.17, 0.90), (0.16, 0.78), (0.15, 0.65),
+    (0.14, 0.50), (0.12, 0.35), (0.10, 0.18),
+])
+
+# ---------------------------------------------------------------------------
+# Neighborhood polygons — hand-traced from West Linn's neighborhood map
+# Vertices are in (x, y) local coords.  Polygons should be closed (first
+# vertex = last vertex) but the code will close them automatically.
+# ---------------------------------------------------------------------------
+NHOOD_POLYS = {
+    # Robinwood — NW, along Willamette River and I-205, largest neighborhood
+    "N04": np.array([
+        (0.00, 0.92), (0.08, 0.96), (0.18, 0.99), (0.30, 1.00),
+        (0.30, 0.82), (0.18, 0.78), (0.16, 0.65), (0.14, 0.55),
+        (0.00, 0.55), (-0.04, 0.65), (-0.05, 0.78), (0.00, 0.92),
+    ]),
+    # Willamette — NE, historic downtown along the river
+    "N07": np.array([
+        (0.30, 1.00), (0.48, 1.02), (0.62, 0.98), (0.75, 0.93),
+        (0.80, 0.88), (0.72, 0.72), (0.55, 0.72), (0.42, 0.75),
+        (0.30, 0.82), (0.30, 1.00),
+    ]),
+    # Bolton — west-central, between I-205 and city center
+    "N01": np.array([
+        (0.00, 0.55), (0.14, 0.55), (0.16, 0.65), (0.18, 0.78),
+        (0.30, 0.82), (0.30, 0.72), (0.28, 0.60), (0.25, 0.48),
+        (0.12, 0.38), (0.04, 0.35), (0.00, 0.40), (0.00, 0.55),
+    ]),
+    # Bland Circle — central
+    "N10": np.array([
+        (0.25, 0.48), (0.28, 0.60), (0.30, 0.72), (0.42, 0.75),
+        (0.55, 0.72), (0.52, 0.58), (0.48, 0.48), (0.42, 0.42),
+        (0.35, 0.40), (0.25, 0.48),
+    ]),
+    # Marylhurst — east-central, includes old college campus
+    "N03": np.array([
+        (0.55, 0.72), (0.72, 0.72), (0.80, 0.88), (0.88, 0.82),
+        (0.92, 0.72), (0.88, 0.58), (0.78, 0.48), (0.65, 0.45),
+        (0.52, 0.58), (0.55, 0.72),
+    ]),
+    # Sunset — southwest
+    "N05": np.array([
+        (0.04, 0.35), (0.12, 0.38), (0.25, 0.48), (0.35, 0.40),
+        (0.32, 0.28), (0.25, 0.20), (0.18, 0.15), (0.10, 0.18),
+        (0.04, 0.25), (0.04, 0.35),
+    ]),
+    # Savanna Oaks — south-central
+    "N06": np.array([
+        (0.35, 0.40), (0.42, 0.42), (0.48, 0.48), (0.52, 0.42),
+        (0.50, 0.30), (0.45, 0.22), (0.38, 0.18), (0.32, 0.20),
+        (0.32, 0.28), (0.35, 0.40),
+    ]),
+    # Tanner Basin — south-east
+    "N08": np.array([
+        (0.48, 0.48), (0.52, 0.58), (0.65, 0.45), (0.78, 0.48),
+        (0.82, 0.38), (0.75, 0.28), (0.65, 0.22), (0.55, 0.22),
+        (0.50, 0.30), (0.52, 0.42), (0.48, 0.48),
+    ]),
+    # Parker Crest — south, higher elevation
+    "N09": np.array([
+        (0.32, 0.20), (0.38, 0.18), (0.45, 0.22), (0.50, 0.30),
+        (0.55, 0.22), (0.50, 0.10), (0.42, 0.05), (0.32, 0.05),
+        (0.25, 0.10), (0.25, 0.20), (0.32, 0.20),
+    ]),
+    # Hidden Springs — far south/southeast, highest elevation
+    "N02": np.array([
+        (0.55, 0.22), (0.65, 0.22), (0.75, 0.28), (0.82, 0.22),
+        (0.80, 0.10), (0.72, 0.04), (0.60, 0.02), (0.50, 0.05),
+        (0.50, 0.10), (0.55, 0.22),
+    ]),
 }
 
+# City outline — union of all neighborhoods (convex-ish hull)
+CITY_OUTLINE = np.array([
+    (-0.05, 0.78), (0.00, 0.92), (0.08, 0.96), (0.18, 0.99),
+    (0.30, 1.00), (0.48, 1.02), (0.62, 0.98), (0.75, 0.93),
+    (0.80, 0.88), (0.88, 0.82), (0.92, 0.72), (0.88, 0.58),
+    (0.82, 0.38), (0.82, 0.22), (0.80, 0.10), (0.72, 0.04),
+    (0.60, 0.02), (0.50, -0.02), (0.42, 0.05), (0.32, 0.05),
+    (0.25, 0.10), (0.18, 0.15), (0.10, 0.18), (0.04, 0.25),
+    (0.00, 0.40), (-0.04, 0.55), (-0.06, 0.65), (-0.05, 0.78),
+])
+
+
 # ---------------------------------------------------------------------------
-# Helpers — procedural raster generation
+# Raster generation helpers
 # ---------------------------------------------------------------------------
 
-def _make_perlin_like(rows, cols, scale=40, rng=None):
-    """Quick smooth noise via upsampled random grid + gaussian blur."""
+def _smooth_noise(shape, scale=8, rng=None):
+    """Generate smooth 2D noise by upsampling a small random grid."""
+    rows, cols = shape
     if rng is None:
         rng = np.random.default_rng(SEED)
-    small_r = max(rows // scale, 2)
-    small_c = max(cols // scale, 2)
-    # low-res random field
-    lo = rng.random((small_r, small_c)).astype(np.float32)
-    # bilinear upsample with numpy (no scipy dependency)
-    from numpy import interp as _interp
-    row_idx = np.linspace(0, small_r - 1, rows)
-    col_idx = np.linspace(0, small_c - 1, cols)
-    # interpolate rows then columns
-    tmp = np.zeros((rows, small_c), dtype=np.float32)
-    for c in range(small_c):
-        tmp[:, c] = np.interp(row_idx, np.arange(small_r), lo[:, c])
-    out = np.zeros((rows, cols), dtype=np.float32)
+    sr = max(rows // scale, 2)
+    sc = max(cols // scale, 2)
+    lo = rng.random((sr, sc)).astype(np.float32)
+    ri = np.linspace(0, sr - 1, rows)
+    ci = np.linspace(0, sc - 1, cols)
+    tmp = np.zeros((rows, sc), np.float32)
+    for c in range(sc):
+        tmp[:, c] = np.interp(ri, np.arange(sr), lo[:, c])
+    out = np.zeros((rows, cols), np.float32)
     for r in range(rows):
-        out[r, :] = np.interp(col_idx, np.arange(small_c), tmp[r, :])
+        out[r, :] = np.interp(ci, np.arange(sc), tmp[r, :])
     return out
 
 
-def _generate_ndvi(summaries, rng):
-    """Build a synthetic NDVI raster (0-1). High canopy → high NDVI."""
-    base = _make_perlin_like(GRID, GRID, scale=30, rng=rng) * 0.15
-    ndvi = np.full((GRID, GRID), 0.25, dtype=np.float32)  # bare default
+def _poly_mask(poly, xmin, xmax, ymin, ymax, nx, ny):
+    """Return a boolean (ny, nx) mask for pixels inside polygon."""
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymax, ymin, ny)  # y-axis flipped for image coords
+    xx, yy = np.meshgrid(xs, ys)
+    pts = np.column_stack([xx.ravel(), yy.ravel()])
+    verts = poly if np.allclose(poly[0], poly[-1]) else np.vstack([poly, poly[0:1]])
+    path = MplPath(verts)
+    mask = path.contains_points(pts).reshape(ny, nx)
+    return mask
 
-    for s in summaries:
-        nid = s.neighborhood.neighborhood_id
-        if nid not in NHOOD_BOXES:
+
+def _city_mask(nx, ny, xmin=-0.1, xmax=1.0, ymin=-0.05, ymax=1.05):
+    return _poly_mask(CITY_OUTLINE, xmin, xmax, ymin, ymax, nx, ny)
+
+
+def _build_summary_map(summaries):
+    """Map neighborhood_id -> summary."""
+    return {s.neighborhood.neighborhood_id: s for s in summaries}
+
+
+def _generate_ndvi_raster(summaries, nx, ny, rng,
+                          xmin=-0.1, xmax=1.0, ymin=-0.05, ymax=1.05):
+    """Generate NDVI raster with values driven by neighborhood canopy %."""
+    smap = _build_summary_map(summaries)
+    # base noise
+    ndvi = _smooth_noise((ny, nx), scale=12, rng=rng) * 0.12 + 0.15
+    # water band at top (low NDVI)
+    water_y = int(ny * 0.04)
+    ndvi[:water_y, :] = rng.uniform(0.02, 0.08, (water_y, nx))
+
+    for nid, poly in NHOOD_POLYS.items():
+        if nid not in smap:
             continue
-        r0, r1, c0, c1 = NHOOD_BOXES[nid]
-        h, w = r1 - r0, c1 - c0
-        canopy_frac = s.canopy_pct / 100.0
+        s = smap[nid]
+        mask = _poly_mask(poly, xmin, xmax, ymin, ymax, nx, ny)
+        canopy_f = s.canopy_pct / 100.0
+        imp_f = s.total_impervious_acres / max(s.neighborhood.area_acres, 1)
 
-        # base NDVI proportional to canopy
-        patch = rng.normal(loc=canopy_frac * 0.85, scale=0.10, size=(h, w)).astype(np.float32)
+        # base value proportional to canopy
+        base_val = canopy_f * 0.80 + 0.10
+        patch = rng.normal(loc=base_val, scale=0.08, size=(ny, nx)).astype(np.float32)
 
-        # add park hotspots (higher NDVI)
+        # add park hotspots
         for park in s.parks:
-            pr = rng.integers(2, max(h - 4, 3))
-            pc = rng.integers(2, max(w - 4, 3))
-            radius = int(np.sqrt(park.area_acres) * 1.5) + 2
-            yr, xr = np.ogrid[-pr:h - pr, -pc:w - pc]
-            mask = (yr * yr + xr * xr) <= radius * radius
-            patch[mask] += 0.12
+            cx_p = np.mean(poly[:, 0]) + rng.uniform(-0.05, 0.05)
+            cy_p = np.mean(poly[:, 1]) + rng.uniform(-0.05, 0.05)
+            px = int((cx_p - xmin) / (xmax - xmin) * nx)
+            py = int((1 - (cy_p - ymin) / (ymax - ymin)) * ny)
+            rad = int(np.sqrt(park.area_acres) * 2.5) + 3
+            yy, xx = np.ogrid[max(py-rad,0):min(py+rad,ny),
+                               max(px-rad,0):min(px+rad,nx)]
+            dist2 = (yy - py)**2 + (xx - px)**2
+            park_boost = 0.15 * np.exp(-dist2 / (2 * rad**2))
+            sl_y = slice(max(py-rad,0), min(py+rad,ny))
+            sl_x = slice(max(px-rad,0), min(px+rad,nx))
+            patch[sl_y, sl_x] += park_boost
 
-        # impervious areas (lower NDVI)
-        imp_frac = s.total_impervious_acres / s.neighborhood.area_acres
-        imp_mask = rng.random((h, w)) < imp_frac * 0.6
-        patch[imp_mask] -= 0.25
+        # impervious spots (reduced NDVI)
+        imp_mask = rng.random((ny, nx)) < imp_f * 0.5
+        patch[imp_mask] -= 0.20
 
-        ndvi[r0:r1, c0:c1] = patch
+        ndvi[mask] = patch[mask]
 
-    ndvi += base
-    return np.clip(ndvi, 0.0, 1.0)
+    # mask outside city
+    city = _city_mask(nx, ny, xmin, xmax, ymin, ymax)
+    ndvi[~city] = np.nan
+    return np.clip(ndvi, 0, 1)
 
 
-def _generate_chm(summaries, rng):
-    """Build a synthetic Canopy Height Model in feet (0-160)."""
-    base = _make_perlin_like(GRID, GRID, scale=25, rng=rng) * 8
-    chm = np.full((GRID, GRID), 0.0, dtype=np.float32)
+def _generate_chm_raster(summaries, nx, ny, rng,
+                         xmin=-0.1, xmax=1.0, ymin=-0.05, ymax=1.05):
+    """Generate canopy height model with individual tree blobs."""
+    smap = _build_summary_map(summaries)
+    chm = np.zeros((ny, nx), np.float32)
 
-    for s in summaries:
-        nid = s.neighborhood.neighborhood_id
-        if nid not in NHOOD_BOXES:
+    for nid, poly in NHOOD_POLYS.items():
+        if nid not in smap:
             continue
-        r0, r1, c0, c1 = NHOOD_BOXES[nid]
-        h, w = r1 - r0, c1 - c0
-        canopy_frac = s.canopy_pct / 100.0
+        s = smap[nid]
+        mask = _poly_mask(poly, xmin, xmax, ymin, ymax, nx, ny)
+        canopy_f = s.canopy_pct / 100.0
 
-        # place individual "trees" as gaussian blobs
-        n_trees = int(canopy_frac * h * w * 0.08)
-        patch = np.zeros((h, w), dtype=np.float32)
+        n_trees = int(canopy_f * np.sum(mask) * 0.06)
+        # find pixel locations inside polygon
+        ys_in, xs_in = np.where(mask)
+        if len(ys_in) == 0:
+            continue
         for _ in range(n_trees):
-            ty = rng.integers(0, h)
-            tx = rng.integers(0, w)
-            tree_h = rng.normal(loc=70 * canopy_frac + 30, scale=25)
-            tree_h = np.clip(tree_h, 10, 155)
-            spread = rng.integers(2, 5)
-            y0 = max(ty - spread, 0)
-            y1 = min(ty + spread + 1, h)
-            x0 = max(tx - spread, 0)
-            x1 = min(tx + spread + 1, w)
+            idx = rng.integers(0, len(ys_in))
+            ty, tx = ys_in[idx], xs_in[idx]
+            h = rng.normal(loc=60 * canopy_f + 35, scale=22)
+            h = np.clip(h, 12, 150)
+            sp = rng.integers(2, 5)
+            y0 = max(ty - sp, 0)
+            y1 = min(ty + sp + 1, ny)
+            x0 = max(tx - sp, 0)
+            x1 = min(tx + sp + 1, nx)
             yr = np.arange(y0, y1)[:, None]
             xr = np.arange(x0, x1)[None, :]
-            gauss = tree_h * np.exp(-((yr - ty) ** 2 + (xr - tx) ** 2) / (2 * spread))
-            patch[y0:y1, x0:x1] = np.maximum(patch[y0:y1, x0:x1], gauss)
+            gauss = h * np.exp(-((yr - ty)**2 + (xr - tx)**2) / (2 * sp))
+            chm[y0:y1, x0:x1] = np.maximum(chm[y0:y1, x0:x1], gauss)
 
-        # parks get taller, denser trees
+        # extra tall trees in parks
         for park in s.parks:
-            pr = rng.integers(3, max(h - 5, 4))
-            pc = rng.integers(3, max(w - 5, 4))
-            radius = int(np.sqrt(park.area_acres) * 1.5) + 3
-            for _ in range(int(park.canopy_acres * 0.5)):
-                ty = int(np.clip(rng.normal(pr, radius * 0.4), 0, h - 1))
-                tx = int(np.clip(rng.normal(pc, radius * 0.4), 0, w - 1))
-                tree_h = rng.normal(loc=95, scale=20)
-                tree_h = np.clip(tree_h, 40, 155)
-                spread = rng.integers(2, 5)
-                y0 = max(ty - spread, 0)
-                y1 = min(ty + spread + 1, h)
-                x0 = max(tx - spread, 0)
-                x1 = min(tx + spread + 1, w)
+            cx_p = np.mean(poly[:, 0]) + rng.uniform(-0.04, 0.04)
+            cy_p = np.mean(poly[:, 1]) + rng.uniform(-0.04, 0.04)
+            px = int((cx_p - xmin) / (xmax - xmin) * nx)
+            py = int((1 - (cy_p - ymin) / (ymax - ymin)) * ny)
+            for _ in range(int(park.canopy_acres * 0.4)):
+                tx = int(np.clip(rng.normal(px, 8), 0, nx - 1))
+                ty = int(np.clip(rng.normal(py, 8), 0, ny - 1))
+                h = rng.normal(loc=100, scale=18)
+                h = np.clip(h, 50, 150)
+                sp = rng.integers(2, 5)
+                y0 = max(ty - sp, 0)
+                y1 = min(ty + sp + 1, ny)
+                x0 = max(tx - sp, 0)
+                x1 = min(tx + sp + 1, nx)
                 yr = np.arange(y0, y1)[:, None]
                 xr = np.arange(x0, x1)[None, :]
-                gauss = tree_h * np.exp(-((yr - ty) ** 2 + (xr - tx) ** 2) / (2 * spread))
-                patch[y0:y1, x0:x1] = np.maximum(patch[y0:y1, x0:x1], gauss)
+                gauss = h * np.exp(-((yr - ty)**2 + (xr - tx)**2) / (2 * sp))
+                chm[y0:y1, x0:x1] = np.maximum(chm[y0:y1, x0:x1], gauss)
 
-        chm[r0:r1, c0:c1] = patch
-
-    chm += base
-    chm[chm < 0] = 0
-    return np.clip(chm, 0, 160)
+    city = _city_mask(nx, ny, xmin, xmax, ymin, ymax)
+    chm[~city] = np.nan
+    return chm
 
 
-def _generate_elevation(neighborhoods, rng):
-    """Build a synthetic DEM surface using neighbourhood elevation data."""
-    dem = _make_perlin_like(GRID, GRID, scale=50, rng=rng) * 40 + 200
-    for n in neighborhoods:
-        nid = n.neighborhood_id
-        if nid not in NHOOD_BOXES:
+def _generate_dem_raster(neighborhoods, nx, ny, rng,
+                         xmin=-0.1, xmax=1.0, ymin=-0.05, ymax=1.05):
+    """Generate elevation surface from neighborhood average elevations."""
+    nmap = {n.neighborhood_id: n for n in neighborhoods}
+    dem = _smooth_noise((ny, nx), scale=15, rng=rng) * 30 + 200
+
+    for nid, poly in NHOOD_POLYS.items():
+        if nid not in nmap:
             continue
-        r0, r1, c0, c1 = NHOOD_BOXES[nid]
-        h, w = r1 - r0, c1 - c0
-        patch = rng.normal(loc=n.elevation_ft_avg, scale=30, size=(h, w)).astype(np.float32)
-        # smooth blend
-        dem[r0:r1, c0:c1] = dem[r0:r1, c0:c1] * 0.2 + patch * 0.8
+        mask = _poly_mask(poly, xmin, xmax, ymin, ymax, nx, ny)
+        elev = nmap[nid].elevation_ft_avg
+        patch = rng.normal(loc=elev, scale=25, size=(ny, nx)).astype(np.float32)
+        dem[mask] = dem[mask] * 0.15 + patch[mask] * 0.85
+
+    city = _city_mask(nx, ny, xmin, xmax, ymin, ymax)
+    dem[~city] = np.nan
     return dem
 
 
-def _generate_landcover(summaries, rng):
-    """Build a classified land cover raster.  Classes:
-       0=water, 1=impervious, 2=bare/grass, 3=shrub, 4=canopy
-    """
-    lc = np.full((GRID, GRID), 2, dtype=np.int8)  # default = open ground
-    # water along north edge (Willamette River)
-    lc[0:8, :] = 0
-
-    for s in summaries:
-        nid = s.neighborhood.neighborhood_id
-        if nid not in NHOOD_BOXES:
-            continue
-        r0, r1, c0, c1 = NHOOD_BOXES[nid]
-        h, w = r1 - r0, c1 - c0
-
-        canopy_frac = s.canopy_pct / 100.0
-        imp_frac = s.total_impervious_acres / s.neighborhood.area_acres
-
-        draw = rng.random((h, w))
-        patch = np.full((h, w), 2, dtype=np.int8)
-        patch[draw < canopy_frac] = 4
-        patch[(draw >= canopy_frac) & (draw < canopy_frac + imp_frac)] = 1
-        remaining = (draw >= canopy_frac + imp_frac)
-        patch[remaining & (rng.random((h, w)) < 0.3)] = 3  # shrub
-
-        lc[r0:r1, c0:c1] = patch
-
-    return lc
-
-
 # ---------------------------------------------------------------------------
-# Custom colormaps
+# Colormaps
 # ---------------------------------------------------------------------------
 
 def _ndvi_cmap():
     colors = [
-        (0.65, 0.55, 0.40),  # bare soil / brown
-        (0.85, 0.82, 0.60),  # dry grass
-        (0.55, 0.75, 0.30),  # light vegetation
-        (0.20, 0.60, 0.15),  # moderate vegetation
-        (0.05, 0.40, 0.05),  # dense canopy
-        (0.00, 0.27, 0.00),  # very dense canopy
+        (0.60, 0.50, 0.35),  # bare soil
+        (0.80, 0.78, 0.55),  # dry grass
+        (0.55, 0.75, 0.30),  # light veg
+        (0.20, 0.58, 0.15),  # moderate
+        (0.05, 0.40, 0.05),  # dense
+        (0.00, 0.25, 0.00),  # very dense
     ]
-    return LinearSegmentedColormap.from_list("ndvi", colors, N=256)
+    cmap = LinearSegmentedColormap.from_list("ndvi", colors, N=256)
+    cmap.set_bad("#1a1a2e")
+    return cmap
 
 
 def _chm_cmap():
     colors = [
-        (0.90, 0.88, 0.82),  # ground
-        (0.75, 0.85, 0.45),  # low shrub
-        (0.40, 0.72, 0.25),  # small tree
-        (0.15, 0.55, 0.12),  # medium tree
-        (0.05, 0.38, 0.08),  # tall tree
-        (0.02, 0.22, 0.02),  # very tall (old growth)
+        (0.88, 0.86, 0.80),  # ground
+        (0.72, 0.82, 0.42),  # shrub
+        (0.38, 0.70, 0.22),  # small tree
+        (0.15, 0.52, 0.12),  # medium
+        (0.05, 0.38, 0.08),  # tall
+        (0.02, 0.22, 0.02),  # old growth
     ]
-    return LinearSegmentedColormap.from_list("chm", colors, N=256)
+    cmap = LinearSegmentedColormap.from_list("chm", colors, N=256)
+    cmap.set_bad("#1a1a2e")
+    return cmap
 
 
-def _landcover_cmap():
-    cmap = mcolors.ListedColormap([
-        "#2B6CA3",  # 0 water
-        "#B0B0B0",  # 1 impervious
-        "#D4C87A",  # 2 bare/grass
-        "#8DB86E",  # 3 shrub
-        "#1B6E1B",  # 4 canopy
-    ])
+def _dem_cmap():
+    colors = [
+        (0.30, 0.55, 0.30),  # low river valleys
+        (0.50, 0.70, 0.35),  # low hills
+        (0.70, 0.78, 0.45),  # mid elevation
+        (0.85, 0.82, 0.55),  # upper slopes
+        (0.75, 0.65, 0.45),  # high ridges
+        (0.60, 0.50, 0.35),  # peaks
+    ]
+    cmap = LinearSegmentedColormap.from_list("dem", colors, N=256)
+    cmap.set_bad("#1a1a2e")
     return cmap
 
 
 # ---------------------------------------------------------------------------
-# Main figure
+# Drawing helpers
+# ---------------------------------------------------------------------------
+
+def _draw_river(ax, pts, width=3.5, color="#3a7bbf", alpha=0.85):
+    """Draw a smooth river polyline."""
+    from matplotlib.lines import Line2D
+    ax.plot(pts[:, 0], pts[:, 1], color=color, linewidth=width,
+            alpha=alpha, solid_capstyle="round", zorder=5)
+    # water fill above the river
+    ax.fill_between(pts[:, 0], pts[:, 1], y2=1.1,
+                    color=color, alpha=0.25, zorder=1)
+
+
+def _draw_i205(ax, pts, color="#aaaaaa", alpha=0.6):
+    ax.plot(pts[:, 0], pts[:, 1], color=color, linewidth=2,
+            linestyle="--", alpha=alpha, zorder=6)
+    mid = len(pts) // 2
+    ax.text(pts[mid, 0] - 0.03, pts[mid, 1], "I-205",
+            fontsize=7, color=color, alpha=0.8, rotation=85,
+            ha="center", va="center", fontweight="bold", zorder=7)
+
+
+def _draw_neighborhood_boundaries(ax, summaries, label_fontsize=7,
+                                   edge_color="white", edge_alpha=0.7):
+    """Draw neighborhood polygon outlines and labels."""
+    smap = _build_summary_map(summaries)
+    for nid, poly in NHOOD_POLYS.items():
+        verts = poly if np.allclose(poly[0], poly[-1]) else np.vstack([poly, poly[0:1]])
+        codes = [MplPath.MOVETO] + [MplPath.LINETO] * (len(verts) - 2) + [MplPath.CLOSEPOLY]
+        path = MplPath(verts, codes)
+        patch = PathPatch(path, facecolor="none", edgecolor=edge_color,
+                          linewidth=1.0, alpha=edge_alpha, zorder=8)
+        ax.add_patch(patch)
+
+        cx = np.mean(poly[:, 0])
+        cy = np.mean(poly[:, 1])
+        if nid in smap:
+            s = smap[nid]
+            label = "{}\n{:.0f}%".format(s.neighborhood.name, s.canopy_pct)
+        else:
+            label = nid
+        ax.text(cx, cy, label, ha="center", va="center",
+                fontsize=label_fontsize, fontweight="bold", color="white",
+                zorder=10,
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="black",
+                          alpha=0.55, edgecolor="none"))
+
+
+def _style_map_ax(ax, title, title_color="#e0e0e0"):
+    """Common styling for map axes."""
+    ax.set_xlim(-0.12, 1.05)
+    ax.set_ylim(-0.08, 1.08)
+    ax.set_aspect("equal")
+    ax.set_facecolor("#1a1a2e")
+    ax.set_title(title, fontsize=14, fontweight="bold",
+                 color=title_color, pad=10)
+    ax.axis("off")
+
+
+# ---------------------------------------------------------------------------
+# Main dashboard
 # ---------------------------------------------------------------------------
 
 def build_dashboard():
@@ -292,216 +461,197 @@ def build_dashboard():
     services = estimate_services(canopy_acres)
 
     rng = np.random.default_rng(SEED)
+    NX, NY = 500, 500
+    xmin, xmax, ymin, ymax = -0.1, 1.0, -0.05, 1.05
+    extent = [xmin, xmax, ymin, ymax]
 
-    # Generate rasters
-    ndvi = _generate_ndvi(summaries, rng)
-    chm = _generate_chm(summaries, rng)
-    dem = _generate_elevation(neighborhoods, rng)
-    lc = _generate_landcover(summaries, rng)
+    # generate rasters
+    ndvi = _generate_ndvi_raster(summaries, NX, NY, rng, xmin, xmax, ymin, ymax)
+    rng2 = np.random.default_rng(SEED + 1)
+    chm = _generate_chm_raster(summaries, NX, NY, rng2, xmin, xmax, ymin, ymax)
+    rng3 = np.random.default_rng(SEED + 2)
+    dem = _generate_dem_raster(neighborhoods, NX, NY, rng3, xmin, xmax, ymin, ymax)
 
+    # ---- Figure layout: 2x2 grid ------------------------------------------
+    #   top-left:     NDVI map
+    #   top-right:    LiDAR CHM
+    #   bottom-left:  Elevation + bar chart inset
+    #   bottom-right: Stats + ecosystem services
     # -----------------------------------------------------------------------
-    # Build the figure: 3 rows x 3 cols
-    #   Top row:    NDVI (large, spans 2 cols)  |  Canopy bar chart
-    #   Mid row:    LiDAR CHM (large, 2 cols)   |  Land-use pie
-    #   Bot row:    Land cover  |  Elevation  |  Stats text
-    # -----------------------------------------------------------------------
-    fig = plt.figure(figsize=(20, 22), facecolor="#1a1a2e")
-    gs = gridspec.GridSpec(
-        3, 3,
-        height_ratios=[1, 1, 0.85],
-        width_ratios=[1, 1, 0.9],
-        hspace=0.28, wspace=0.25,
-        left=0.05, right=0.95, top=0.93, bottom=0.03,
-    )
+    fig = plt.figure(figsize=(22, 20), facecolor="#1a1a2e")
+    gs = gridspec.GridSpec(2, 2, hspace=0.22, wspace=0.18,
+                           left=0.04, right=0.96, top=0.92, bottom=0.04)
 
-    title_color = "#e0e0e0"
-    label_color = "#c0c0c0"
+    tc = "#e0e0e0"
+    lc = "#c0c0c0"
+
     fig.suptitle(
-        "WEST LINN, OREGON  —  TREE CANOPY INVENTORY 2026\n"
-        "Satellite NDVI & LiDAR Canopy Height Analysis",
-        fontsize=22, fontweight="bold", color=title_color, y=0.97,
+        "WEST LINN, OREGON  —  TREE CANOPY INVENTORY\n"
+        "Satellite NDVI  &  LiDAR Canopy Height Analysis",
+        fontsize=22, fontweight="bold", color=tc, y=0.97,
     )
 
-    # --- Panel 1: NDVI (top-left, 2 cols) ---------------------------------
-    ax_ndvi = fig.add_subplot(gs[0, 0:2])
-    im_ndvi = ax_ndvi.imshow(ndvi, cmap=_ndvi_cmap(), vmin=0, vmax=1, aspect="equal")
-    _overlay_boundaries(ax_ndvi, summaries, label_color)
-    ax_ndvi.set_title("Simulated Satellite NDVI", fontsize=14,
-                       fontweight="bold", color=title_color, pad=10)
-    ax_ndvi.axis("off")
-    cb1 = plt.colorbar(im_ndvi, ax=ax_ndvi, fraction=0.03, pad=0.01)
-    cb1.set_label("NDVI", color=label_color, fontsize=10)
-    cb1.ax.tick_params(colors=label_color, labelsize=8)
+    # --- Panel 1: NDVI -----------------------------------------------------
+    ax1 = fig.add_subplot(gs[0, 0])
+    im1 = ax1.imshow(ndvi, cmap=_ndvi_cmap(), vmin=0, vmax=0.85,
+                     extent=extent, origin="upper", aspect="equal",
+                     interpolation="bilinear")
+    _draw_river(ax1, WILLAMETTE_RIVER, width=6, color="#2a6faa")
+    _draw_river(ax1, TUALATIN_RIVER, width=4, color="#3580bb")
+    _draw_i205(ax1, I205_LINE)
+    _draw_neighborhood_boundaries(ax1, summaries, label_fontsize=7)
+    _style_map_ax(ax1, "Satellite NDVI  (Normalized Difference Vegetation Index)")
+    cb1 = plt.colorbar(im1, ax=ax1, fraction=0.035, pad=0.02, shrink=0.85)
+    cb1.set_label("NDVI", color=lc, fontsize=10)
+    cb1.ax.tick_params(colors=lc, labelsize=8)
 
-    # --- Panel 2: Neighborhood bar chart (top-right) -----------------------
-    ax_bar = fig.add_subplot(gs[0, 2])
-    ax_bar.set_facecolor("#1a1a2e")
+    # compass rose
+    ax1.annotate("N", xy=(0.95, 1.02), fontsize=11, fontweight="bold",
+                 color=tc, ha="center", va="bottom")
+    ax1.annotate("", xy=(0.95, 1.02), xytext=(0.95, 0.92),
+                 arrowprops=dict(arrowstyle="->", color=tc, lw=1.5))
+
+    # river labels
+    ax1.text(0.55, 1.04, "Willamette River", fontsize=8, color="#5ba3d9",
+             fontstyle="italic", ha="center", zorder=11)
+    ax1.text(-0.08, 0.50, "Tualatin\nRiver", fontsize=7, color="#5ba3d9",
+             fontstyle="italic", ha="center", rotation=60, zorder=11)
+
+    # --- Panel 2: LiDAR CHM -----------------------------------------------
+    ax2 = fig.add_subplot(gs[0, 1])
+    im2 = ax2.imshow(chm, cmap=_chm_cmap(), vmin=0, vmax=140,
+                     extent=extent, origin="upper", aspect="equal",
+                     interpolation="bilinear")
+    _draw_river(ax2, WILLAMETTE_RIVER, width=6, color="#2a6faa")
+    _draw_river(ax2, TUALATIN_RIVER, width=4, color="#3580bb")
+    _draw_i205(ax2, I205_LINE)
+    _draw_neighborhood_boundaries(ax2, summaries, label_fontsize=7)
+    _style_map_ax(ax2, "LiDAR Canopy Height Model  (CHM)")
+    cb2 = plt.colorbar(im2, ax=ax2, fraction=0.035, pad=0.02, shrink=0.85)
+    cb2.set_label("Canopy Height (ft)", color=lc, fontsize=10)
+    cb2.ax.tick_params(colors=lc, labelsize=8)
+
+    # height class legend
+    ht_labels = [("0-20 ft", "#e0dcc8"), ("20-50 ft", "#b8d26b"),
+                 ("50-80 ft", "#5fb338"), ("80-110 ft", "#27851e"),
+                 ("110-140 ft", "#0a6114"), (">140 ft", "#053808")]
+    ht_patches = [mpatches.Patch(color=c, label=l) for l, c in ht_labels]
+    ax2.legend(handles=ht_patches, loc="lower left", fontsize=7,
+               frameon=True, facecolor="#1a1a2e", edgecolor="#444",
+               labelcolor=lc, ncol=2, bbox_to_anchor=(0.0, -0.01))
+
+    # --- Panel 3: Elevation + bar chart -----------------------------------
+    ax3 = fig.add_subplot(gs[1, 0])
+    im3 = ax3.imshow(dem, cmap=_dem_cmap(), vmin=150, vmax=680,
+                     extent=extent, origin="upper", aspect="equal",
+                     interpolation="bilinear")
+    _draw_river(ax3, WILLAMETTE_RIVER, width=6, color="#2a6faa")
+    _draw_river(ax3, TUALATIN_RIVER, width=4, color="#3580bb")
+    _draw_i205(ax3, I205_LINE)
+    _draw_neighborhood_boundaries(ax3, summaries, label_fontsize=6,
+                                   edge_color="#333333")
+    _style_map_ax(ax3, "Digital Elevation Model  (ft above sea level)")
+    cb3 = plt.colorbar(im3, ax=ax3, fraction=0.035, pad=0.02, shrink=0.85)
+    cb3.set_label("Elevation (ft)", color=lc, fontsize=10)
+    cb3.ax.tick_params(colors=lc, labelsize=8)
+
+    # inset bar chart for canopy by neighborhood
+    ax_bar = fig.add_axes([0.30, 0.06, 0.18, 0.22])
+    ax_bar.set_facecolor("#0d1b0d")
+    ax_bar.patch.set_alpha(0.85)
     sorted_s = sorted(summaries, key=lambda s: s.canopy_pct)
-    names = [s.neighborhood.name for s in sorted_s]
+    names = [s.neighborhood.name[:12] for s in sorted_s]
     pcts = [s.canopy_pct for s in sorted_s]
-    colors_bar = [plt.cm.YlGn(p / 65.0) for p in pcts]
-    bars = ax_bar.barh(names, pcts, color=colors_bar, edgecolor="#333333", linewidth=0.5)
-    ax_bar.axvline(x=canopy_pct, color="#ff6b6b", linestyle="--", linewidth=1.5, alpha=0.8)
-    ax_bar.text(canopy_pct + 0.5, len(names) - 0.5,
-                "City avg\n{:.1f}%".format(canopy_pct),
-                color="#ff6b6b", fontsize=8, va="top")
-    for i, (bar, pct) in enumerate(zip(bars, pcts)):
-        ax_bar.text(pct + 0.5, i, "{:.1f}%".format(pct),
-                    va="center", fontsize=8, color=label_color)
-    ax_bar.set_xlabel("Canopy Coverage %", color=label_color, fontsize=10)
-    ax_bar.set_title("Neighborhood Canopy Coverage", fontsize=13,
-                      fontweight="bold", color=title_color, pad=10)
-    ax_bar.tick_params(colors=label_color, labelsize=9)
-    ax_bar.spines["top"].set_visible(False)
-    ax_bar.spines["right"].set_visible(False)
+    y_pos = np.arange(len(names))
+    bar_colors = [plt.cm.YlGn(p / 65.0) for p in pcts]
+    ax_bar.barh(y_pos, pcts, color=bar_colors, edgecolor="#333", linewidth=0.4, height=0.7)
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(names)
+    ax_bar.axvline(x=canopy_pct, color="#ff6b6b", linestyle="--", linewidth=1, alpha=0.7)
+    ax_bar.set_xlim(0, 68)
+    ax_bar.tick_params(colors=lc, labelsize=5.5)
+    ax_bar.set_title("Canopy %", fontsize=7, color=tc, pad=3)
     for spine in ax_bar.spines.values():
-        spine.set_color("#444444")
-    ax_bar.set_xlim(0, 70)
+        spine.set_color("#444")
+    for i, p in enumerate(pcts):
+        ax_bar.text(p + 0.8, i, "{:.0f}%".format(p), va="center",
+                    fontsize=5, color=lc)
 
-    # --- Panel 3: LiDAR CHM (mid-left, 2 cols) ----------------------------
-    ax_chm = fig.add_subplot(gs[1, 0:2])
-    im_chm = ax_chm.imshow(chm, cmap=_chm_cmap(), vmin=0, vmax=150, aspect="equal")
-    _overlay_boundaries(ax_chm, summaries, label_color)
-    ax_chm.set_title("Simulated LiDAR Canopy Height Model (CHM)", fontsize=14,
-                      fontweight="bold", color=title_color, pad=10)
-    ax_chm.axis("off")
-    cb2 = plt.colorbar(im_chm, ax=ax_chm, fraction=0.03, pad=0.01)
-    cb2.set_label("Height (ft)", color=label_color, fontsize=10)
-    cb2.ax.tick_params(colors=label_color, labelsize=8)
-
-    # --- Panel 4: Land-use pie chart (mid-right) ---------------------------
-    ax_pie = fig.add_subplot(gs[1, 2])
-    ax_pie.set_facecolor("#1a1a2e")
-    lu = canopy_by_land_use(records)
-    lu_names = []
-    lu_canopy = []
-    for name in sorted(lu.keys(), key=lambda k: lu[k]["canopy"], reverse=True):
-        lu_names.append(name)
-        lu_canopy.append(lu[name]["canopy"])
-    pie_colors = ["#2d6a4f", "#40916c", "#52b788", "#74c69d", "#95d5b2", "#b7e4c7", "#d8f3dc"]
-    wedges, texts, autotexts = ax_pie.pie(
-        lu_canopy, labels=None, autopct="%1.0f%%",
-        colors=pie_colors[:len(lu_canopy)],
-        pctdistance=0.78, startangle=140,
-        textprops={"fontsize": 9, "color": "#222222"},
-    )
-    ax_pie.legend(
-        wedges, lu_names, loc="lower center",
-        fontsize=8, frameon=False,
-        bbox_to_anchor=(0.5, -0.08),
-        labelcolor=label_color,
-        ncol=2,
-    )
-    ax_pie.set_title("Canopy Distribution by Land Use", fontsize=13,
-                      fontweight="bold", color=title_color, pad=10)
-
-    # --- Panel 5: Land cover classification (bottom-left) ------------------
-    ax_lc = fig.add_subplot(gs[2, 0])
-    ax_lc.imshow(lc, cmap=_landcover_cmap(), vmin=0, vmax=4, aspect="equal",
-                 interpolation="nearest")
-    ax_lc.set_title("Land Cover Classification", fontsize=13,
-                     fontweight="bold", color=title_color, pad=10)
-    ax_lc.axis("off")
-    lc_labels = ["Water", "Impervious", "Bare / Grass", "Shrub", "Tree Canopy"]
-    lc_colors_hex = ["#2B6CA3", "#B0B0B0", "#D4C87A", "#8DB86E", "#1B6E1B"]
-    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(lc_colors_hex, lc_labels)]
-    ax_lc.legend(handles=patches, loc="lower center", fontsize=8,
-                 frameon=False, ncol=3, bbox_to_anchor=(0.5, -0.06),
-                 labelcolor=label_color)
-
-    # --- Panel 6: Elevation / DEM (bottom-center) -------------------------
-    ax_dem = fig.add_subplot(gs[2, 1])
-    im_dem = ax_dem.imshow(dem, cmap="terrain", vmin=150, vmax=700, aspect="equal")
-    _overlay_boundaries(ax_dem, summaries, "#333333")
-    ax_dem.set_title("Elevation Model (ft)", fontsize=13,
-                      fontweight="bold", color=title_color, pad=10)
-    ax_dem.axis("off")
-    cb3 = plt.colorbar(im_dem, ax=ax_dem, fraction=0.04, pad=0.01)
-    cb3.set_label("Elevation (ft)", color=label_color, fontsize=10)
-    cb3.ax.tick_params(colors=label_color, labelsize=8)
-
-    # --- Panel 7: Summary stats (bottom-right) ----------------------------
-    ax_txt = fig.add_subplot(gs[2, 2])
-    ax_txt.set_facecolor("#1a1a2e")
-    ax_txt.axis("off")
+    # --- Panel 4: Stats & ecosystem services ------------------------------
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.set_facecolor("#1a1a2e")
+    ax4.axis("off")
 
     natives = native_species(species)
     native_pct = sum(s.prevalence_pct for s in natives)
 
-    stats_text = (
+    # Summary box
+    summary = (
         "CITYWIDE SUMMARY\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "Total area assessed:   {:,.0f} acres\n"
-        "Tree canopy:           {:,.0f} acres\n"
-        "Canopy coverage:       {:.1f}%\n"
-        "Neighborhoods:         {:d}\n"
-        "Parks / greenspaces:   {:d}\n"
-        "Species cataloged:     {:d}\n"
-        "Native species:        {:.0f}%\n"
-        "\n"
-        "ECOSYSTEM SERVICES (annual)\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "Stormwater:      ${:>11,.0f}\n"
-        "Air quality:     ${:>11,.0f}\n"
-        "Carbon seq.:     ${:>11,.0f}\n"
-        "Energy savings:  ${:>11,.0f}\n"
-        "                 ───────────\n"
-        "Total annual:    ${:>11,.0f}\n"
-        "\n"
-        "Property value:  ${:>11,.0f}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "  Total area assessed:    {:>7,.0f} acres\n"
+        "  Tree canopy cover:      {:>7,.0f} acres\n"
+        "  Canopy coverage:        {:>7.1f}%\n"
+        "  Neighborhoods:          {:>7d}\n"
+        "  Parks & greenspaces:    {:>7d}\n"
+        "  Species cataloged:      {:>7d}\n"
+        "  Native species share:   {:>7.0f}%\n"
+    ).format(total_acres, canopy_acres, canopy_pct,
+             len(neighborhoods), len(parks), len(species), native_pct)
+
+    eco = (
+        "\n\nECOSYSTEM SERVICES  (estimated annual value)\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "  Stormwater management:  ${:>12,.0f}\n"
+        "  Air quality improvement:${:>12,.0f}\n"
+        "  Carbon sequestration:   ${:>12,.0f}\n"
+        "  Energy savings:         ${:>12,.0f}\n"
+        "                          ─────────────\n"
+        "  Total annual value:     ${:>12,.0f}\n\n"
+        "  Property value uplift:  ${:>12,.0f}\n"
     ).format(
-        total_acres, canopy_acres, canopy_pct,
-        len(neighborhoods), len(parks), len(species), native_pct,
-        services.stormwater_value,
-        services.air_quality_value,
-        services.carbon_sequestration_value,
-        services.energy_savings_value,
-        services.total_annual,
-        services.property_value_increase,
+        services.stormwater_value, services.air_quality_value,
+        services.carbon_sequestration_value, services.energy_savings_value,
+        services.total_annual, services.property_value_increase,
     )
-    ax_txt.text(
-        0.05, 0.95, stats_text,
-        transform=ax_txt.transAxes,
-        fontsize=10, fontfamily="monospace",
-        color="#d0ffd0", verticalalignment="top",
-        bbox=dict(boxstyle="round,pad=0.5", facecolor="#0d1b0d", edgecolor="#2d6a4f",
-                  alpha=0.9),
-    )
+
+    ax4.text(0.05, 0.95, summary + eco,
+             transform=ax4.transAxes, fontsize=12, fontfamily="monospace",
+             color="#c0f0c0", va="top",
+             bbox=dict(boxstyle="round,pad=0.6", facecolor="#0a150a",
+                       edgecolor="#2d6a4f", alpha=0.95, linewidth=1.5))
+
+    # Land-use pie chart as inset
+    ax_pie = ax4.inset_axes([0.10, 0.02, 0.45, 0.32])
+    ax_pie.set_facecolor("#0a150a")
+    lu = canopy_by_land_use(records)
+    lu_items = sorted(lu.items(), key=lambda kv: kv[1]["canopy"], reverse=True)
+    lu_names = [k for k, _ in lu_items]
+    lu_vals = [v["canopy"] for _, v in lu_items]
+    pie_c = ["#1b4332", "#2d6a4f", "#40916c", "#52b788",
+             "#74c69d", "#95d5b2", "#b7e4c7"]
+    wedges, _, autotexts = ax_pie.pie(
+        lu_vals, labels=None, autopct="%1.0f%%",
+        colors=pie_c[:len(lu_vals)], pctdistance=0.75, startangle=140,
+        textprops={"fontsize": 7, "color": "#dddddd"})
+    ax_pie.set_title("Canopy by Land Use", fontsize=9, color=tc, pad=4)
+    ax_pie.legend(wedges, lu_names, loc="center left",
+                  bbox_to_anchor=(1.0, 0.5), fontsize=6.5,
+                  frameon=False, labelcolor=lc)
+
+    # Data source note
+    fig.text(0.50, 0.012,
+             "Data: City of West Linn GIS  |  Oregon Dept. of Forestry  |  "
+             "USDA i-Tree Eco  |  NLCD  |  Metro RLIS    "
+             "Visualization: simulated NDVI & LiDAR from inventory data",
+             ha="center", fontsize=8, color="#666666", fontstyle="italic")
 
     return fig
-
-
-def _overlay_boundaries(ax, summaries, color):
-    """Draw neighbourhood outlines and labels on a raster panel."""
-    for s in summaries:
-        nid = s.neighborhood.neighborhood_id
-        if nid not in NHOOD_BOXES:
-            continue
-        r0, r1, c0, c1 = NHOOD_BOXES[nid]
-        rect = mpatches.FancyBboxPatch(
-            (c0, r0), c1 - c0, r1 - r0,
-            boxstyle="round,pad=1",
-            linewidth=1.2, edgecolor=color, facecolor="none", alpha=0.6,
-        )
-        ax.add_patch(rect)
-        cx = (c0 + c1) / 2
-        cy = (r0 + r1) / 2
-        ax.text(
-            cx, cy,
-            "{}\n{:.0f}%".format(s.neighborhood.name, s.canopy_pct),
-            ha="center", va="center",
-            fontsize=7, fontweight="bold",
-            color="white",
-            bbox=dict(boxstyle="round,pad=0.2", facecolor="black", alpha=0.55),
-        )
 
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / "west_linn_canopy_dashboard.png"
-
     print("Generating canopy visualization dashboard...")
     fig = build_dashboard()
     fig.savefig(str(out_path), dpi=DPI, facecolor=fig.get_facecolor())
